@@ -6,13 +6,11 @@
 #include <ESPAsyncWebServer.h>
 #include <ESP32Servo.h>
 #include "camera_pins.h"
-#include <iostream>
-#include <sstream>
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
+#include <sstream>
 
 const char *ssid = "ESP32_AP";
-const char *password = "password";
 
 WiFiManager manager;
 
@@ -67,24 +65,6 @@ const char htmlHomePage[] PROGMEM = R"rawliteral(
 
         .slider:hover {
             opacity: 1;
-        }
-
-        .slider::-webkit-slider-thumb {
-            -webkit-appearance: none;
-            appearance: none;
-            width: 20px;
-            height: 20px;
-            border-radius: 50%;
-            cursor: pointer;
-            vertical-align: middle;
-        }
-
-        .slider::-moz-range-thumb {
-            width: 20px;
-            height: 20px;
-            border-radius: 50%;
-            cursor: pointer;
-            vertical-align: middle;
         }
     </style>
 
@@ -273,7 +253,7 @@ void setup()
 
     // WiFi connection
     WiFi.mode(WIFI_STA);
-    bool connection = manager.autoConnect(ssid, password);
+    bool connection = manager.autoConnect(ssid);
 
     if (!connection)
     {
@@ -353,7 +333,7 @@ void setupCamera()
     config.pixel_format = PIXFORMAT_JPEG;
 
     config.frame_size = FRAMESIZE_SVGA;
-    config.jpeg_quality = 10;
+    config.jpeg_quality = 12;
     config.fb_count = 1;
 
     esp_err_t err = esp_camera_init(&config);
