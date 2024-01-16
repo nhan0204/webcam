@@ -8,7 +8,12 @@
 #include "camera_pins.h"
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
+#include "fd_forward.h"
+#include "dl_lib_matrix3d.h"
 #include <sstream>
+
+mtmn_config_t mtmn_config = {0};
+int detections = 0;
 
 const char *ssid = "ESP32_AP";
 
@@ -244,31 +249,15 @@ void onServoInputWebsocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *cl
 void setupPinModes();
 void setupCamera();
 void sendCameraImage();
+void setupWiFi();
 
 void setup()
 {
     WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
     Serial.begin(115200);
+    
     setupPinModes();
-
-    // WiFi connection
-    WiFi.mode(WIFI_STA);
-    bool connection = manager.autoConnect(ssid);
-
-    if (!connection)
-    {
-        Serial.println("Failed to connect");
-        manager.resetSettings();
-    }
-
-    while (WiFi.status() != WL_CONNECTED)
-    {
-        Serial.print(".");
-        delay(500);
-    }
-    Serial.println("\nWiFi connected!");
-    Serial.print("http://");
-    Serial.println(WiFi.localIP());
+    setupWiFi();    
 
     server.on("/", HTTP_GET, handleRoot);
     server.onNotFound(handleNotFound);
@@ -308,6 +297,28 @@ void setupPinModes()
     ledcAttachPin(LIGHT_PIN, PWMLightChannel);
 }
 
+void setupWiFi()
+{
+    // WiFi connection
+    WiFi.mode(WIFI_STA);
+    bool connection = manager.autoConnect(ssid);
+
+    if (!connection)
+    {
+        Serial.println("Failed to connect");
+        manager.resetSettings();
+    }
+
+    while (WiFi.status() != WL_CONNECTED)
+    {
+        Serial.print(".");
+        delay(500);
+    }
+    Serial.println("\nWiFi connected!");
+    Serial.print("http://");
+    Serial.println(WiFi.localIP());
+}
+
 void setupCamera()
 {
     camera_config_t config;
@@ -342,6 +353,8 @@ void setupCamera()
         Serial.printf("Camera init failed with error 0x%x", err);
     }
     Serial.println("Camera init success");
+
+    mtmn_config = mtmn_init_config();
 }
 
 void sendCameraImage()
@@ -349,14 +362,17 @@ void sendCameraImage()
     if (cameraClientId == 0)
         return;
 
-    camera_fb_t *framebuffer = esp_camera_fb_get();
-    if (!framebuffer)
+    camera_fb_t *frame = esp_camera_fb_get();
+    if (!frame)
     {
         Serial.println("Frame buffer could not be acquired.");
     }
 
-    camera.binary(cameraClientId, framebuffer->buf, framebuffer->len);
-    esp_camera_fb_return(framebuffer);
+    dl_matrix3du_t *image_matrix = dl_matrix3du_alloc(1, frame->width, frame->height, 3);
+    fmt2rgb888(frame->buf, frame->len, frame->format, image_matrix->item);
+
+    camera.binary(cameraClientId, frame->buf, frame->len);
+    esp_camera_fb_return(frame);
 
     // Wait for message to be delivered
     while (true)
