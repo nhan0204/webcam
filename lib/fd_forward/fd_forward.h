@@ -29,8 +29,8 @@ extern "C"
 #endif
 
 #include "image_util.h"
-#include "dl_lib_matrix3d.h"
-#include "mtmn.h"
+#include "../../include/dl_lib_matrix3d.h"
+#include "../../include/mtmn.h"
 
     typedef enum
     {

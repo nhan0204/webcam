@@ -28,7 +28,7 @@ extern "C"
 #endif
 #include <stdint.h>
 #include <math.h>
-#include "mtmn.h"
+#include "../../include/mtmn.h"
 
 #define MAX_VALID_COUNT_PER_IMAGE (30)
 
