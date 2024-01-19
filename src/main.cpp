@@ -10,40 +10,13 @@
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
 
-#include "fd_forward.h"
-#include "fb_gfx.h"
-
 #include <sstream>
 
-#define FACE_COLOR_GREEN 0x0000FF00
-const int numReadings = 5;
-int readings[numReadings]; // the readings from the analog input
-int readIndex = 0;         // the index of the current reading
-int total = 0;             // the running total
-int average_face_size = 0; // the average
-int face_distance;
+#include "esp32cam.h"
+#include <WifiCam.hpp>
 
-static inline mtmn_config_t app_mtmn_config()
-{
-  mtmn_config_t mtmn_config = {0};
-  mtmn_config.type = FAST;
-  mtmn_config.min_face = 60; // 80 default
-  mtmn_config.pyramid = 0.707;
-  mtmn_config.pyramid_times = 4;
-  mtmn_config.p_threshold.score = 0.6;
-  mtmn_config.p_threshold.nms = 0.7;
-  mtmn_config.p_threshold.candidate_number = 20;
-  mtmn_config.r_threshold.score = 0.7;
-  mtmn_config.r_threshold.nms = 0.7;
-  mtmn_config.r_threshold.candidate_number = 10;
-  mtmn_config.o_threshold.score = 0.7;
-  mtmn_config.o_threshold.nms = 0.7;
-  mtmn_config.o_threshold.candidate_number = 1;
-  return mtmn_config;
-}
-mtmn_config_t mtmn_config = app_mtmn_config();
-
-const char *ssid = "ESP32_AP";
+esp32cam::Resolution initialResolution;
+WebServer server1(81);
 
 WiFiManager manager;
 
@@ -52,10 +25,12 @@ Servo dummyServo2;
 Servo panServo;
 Servo tiltServo;
 
-AsyncWebServer server(80);
+AsyncWebServer server0(80);
 AsyncWebSocket servoInput("/ServoInput");
 AsyncWebSocket camera("/Camera");
 uint32_t cameraClientId = 0;
+
+bool startFaceAttendance = false;
 
 const char htmlHomePage[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
@@ -218,6 +193,7 @@ void onCameraWebsocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client
   case WS_EVT_DISCONNECT:
     Serial.printf("Camera client #%u disconnected\n", client->id());
     cameraClientId = 0;
+    startFaceAttendance = false;
     break;
   case WS_EVT_PONG:
   case WS_EVT_ERROR:
@@ -291,24 +267,33 @@ void setup()
   setupPinModes();
   setupWiFi();
 
-  server.on("/", HTTP_GET, handleRoot);
-  server.onNotFound(handleNotFound);
+  server0.on("/", HTTP_GET, handleRoot);
+  server0.onNotFound(handleNotFound);
 
   camera.onEvent(onCameraWebsocketEvent);
-  server.addHandler(&camera);
+  server0.addHandler(&camera);
 
   servoInput.onEvent(onServoInputWebsocketEvent);
-  server.addHandler(&servoInput);
+  server0.addHandler(&servoInput);
 
-  server.begin();
-  setupCamera();
+  server0.begin();
+  
+  addRequestHandlers();
+  server1.begin();
+
+  startFaceAttendance = false;
 }
 
 void loop()
 {
   camera.cleanupClients();
   servoInput.cleanupClients();
-  sendCameraImage();
+  server1.handleClient();
+
+  if (!startFaceAttendance)
+  {
+    sendCameraImage();
+  }
 }
 
 void setupPinModes()
@@ -333,7 +318,7 @@ void setupWiFi()
 {
   // WiFi connection
   WiFi.mode(WIFI_STA);
-  bool connection = manager.autoConnect(ssid);
+  bool connection = manager.autoConnect("ESP32_AP");
 
   if (!connection)
   {
@@ -346,6 +331,9 @@ void setupWiFi()
     Serial.print(".");
     delay(500);
   }
+
+  setupCamera();
+
   Serial.println("\nWiFi connected!");
   Serial.print("http://");
   Serial.println(WiFi.localIP());
@@ -353,45 +341,25 @@ void setupWiFi()
 
 void setupCamera()
 {
-  camera_config_t config;
-  config.ledc_channel = LEDC_CHANNEL_0;
-  config.ledc_timer = LEDC_TIMER_0;
-  config.pin_d0 = Y2_GPIO_NUM;
-  config.pin_d1 = Y3_GPIO_NUM;
-  config.pin_d2 = Y4_GPIO_NUM;
-  config.pin_d3 = Y5_GPIO_NUM;
-  config.pin_d4 = Y6_GPIO_NUM;
-  config.pin_d5 = Y7_GPIO_NUM;
-  config.pin_d6 = Y8_GPIO_NUM;
-  config.pin_d7 = Y9_GPIO_NUM;
-  config.pin_xclk = XCLK_GPIO_NUM;
-  config.pin_pclk = PCLK_GPIO_NUM;
-  config.pin_vsync = VSYNC_GPIO_NUM;
-  config.pin_href = HREF_GPIO_NUM;
-  config.pin_sccb_sda = SIOD_GPIO_NUM;
-  config.pin_sccb_scl = SIOC_GPIO_NUM;
-  config.pin_pwdn = PWDN_GPIO_NUM;
-  config.pin_reset = RESET_GPIO_NUM;
-  config.xclk_freq_hz = 20000000;
-  config.pixel_format = PIXFORMAT_JPEG;
-
-  config.frame_size = FRAMESIZE_SVGA;
-  config.jpeg_quality = 10;
-  config.fb_count = 1;
-
-  esp_err_t err = esp_camera_init(&config);
-  if (err != ESP_OK)
   {
-    Serial.printf("Camera init failed with error 0x%x", err);
+    using namespace esp32cam;
+
+    initialResolution = Resolution::find(1024, 768);
+
+    Config cfg;
+    cfg.setPins(pins::AiThinker);
+    cfg.setResolution(initialResolution);
+    cfg.setJpeg(80);
+
+    bool ok = Camera.begin(cfg);
+    if (!ok) {
+      Serial.println("camera initialize failure");
+      delay(5000);
+      ESP.restart();
+    }
+    Serial.println("camera initialize success");
   }
-  Serial.println("Camera init success");
-
-  sensor_t *sensor = esp_camera_sensor_get();
-  // sensor->set_framesize(sensor, FRAMESIZE_QVGA);
 }
-
-static void detect_face(camera_fb_t *frame);
-static void draw_face_boxes(dl_matrix3du_t *image_matrix, box_array_t *boxes);
 
 void sendCameraImage()
 {
@@ -406,8 +374,6 @@ void sendCameraImage()
     return;
   }
 
-  // detect_face(frame);
-
   camera.binary(cameraClientId, frame->buf, frame->len);
   esp_camera_fb_return(frame);
 
@@ -418,73 +384,5 @@ void sendCameraImage()
     if (!clientPointer || !clientPointer->queueIsFull())
       break;
     delay(1);
-  }
-}
-
-static void detect_face(camera_fb_t *frame)
-{
-  dl_matrix3du_t *image_matrix = NULL;
-  size_t _jpg_buf_len = 0;
-  uint8_t *_jpg_buf = NULL;
-
-  _jpg_buf_len = frame->len;
-  _jpg_buf = frame->buf;
-  image_matrix = dl_matrix3du_alloc(1, frame->width, frame->height, 3);
-
-  fmt2rgb888(frame->buf, frame->len, frame->format, image_matrix->item);
-
-  box_array_t *net_boxes = face_detect(image_matrix, &mtmn_config);
-  Serial.println(net_boxes->len);
-
-  if (net_boxes)
-  {
-    Serial.println("Detected!");
-    draw_face_boxes(image_matrix, net_boxes);
-    free(net_boxes->score);
-    free(net_boxes->box);
-    free(net_boxes->landmark);
-    free(net_boxes);
-  }
-
-  fmt2jpg(image_matrix->item, frame->width * frame->height * 3, frame->width, frame->height, PIXFORMAT_RGB888, 90, &_jpg_buf, &_jpg_buf_len);
-  camera.binary(cameraClientId, (const char *)_jpg_buf, _jpg_buf_len);
-
-  esp_camera_fb_return(frame);
-  frame = NULL;
-  dl_matrix3du_free(image_matrix);
-  free(_jpg_buf);
-  _jpg_buf = NULL;
-}
-
-static void draw_face_boxes(dl_matrix3du_t *image_matrix, box_array_t *boxes)
-{
-  int x, y, w, h, i, half_width, half_height;
-  uint32_t color = FACE_COLOR_GREEN;
-  fb_data_t frame;
-  frame.width = image_matrix->w;
-  frame.height = image_matrix->h;
-  frame.data = image_matrix->item;
-  frame.bytes_per_pixel = 3;
-  frame.format = FB_BGR888;
-
-  for (i = 0; i < boxes->len; i++)
-  {
-    x = ((int)boxes->box[i].box_p[0]);
-    w = (int)boxes->box[i].box_p[2] - x + 1;
-    half_width = w / 2;
-    int face_center_pan = x + half_width;
-
-    y = ((int)boxes->box[i].box_p[1]);
-    h = (int)boxes->box[i].box_p[3] - y + 1;
-    half_height = h / 2;
-    int face_center_tilt = y + half_height;
-
-    Serial.println(h);
-
-    fb_gfx_drawFastHLine(&frame, x, y, w, color);
-    fb_gfx_drawFastHLine(&frame, x, y, w, color);
-    fb_gfx_drawFastHLine(&frame, x, y + h - 1, w, color);
-    fb_gfx_drawFastVLine(&frame, x, y, h, color);
-    fb_gfx_drawFastVLine(&frame, x + w - 1, y, h, color);
   }
 }
